@@ -1,0 +1,47 @@
+{
+  "name": "clinical-trial-matching-service-template",
+  "version": "0.1.0",
+  "description": "",
+  "main": "dist/server.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcode/clinical-trial-matching-service-template.git"
+  },
+  "scripts": {
+    "build": "npm run-script build:ts",
+    "build:tests": "tsc --build tsconfig.test.json",
+    "build:ts": "tsc",
+    "coverage": "npm run-script build:tests && nyc --require ts-node/register --reporter=lcovonly jasmine",
+    "coverage:html": "npm run-script build:tests && nyc --require ts-node/register --reporter=html jasmine",
+    "lint": "eslint . --ext .js,.ts",
+    "serve": "node start.js",
+    "start": "npm run-script build:ts && npm run-script serve",
+    "test": "npm run-script build:tests && npm run-script test:run",
+    "test:run": "jasmine"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "clinical-trial-matching-service": "^0.1.0",
+    "dotenv-flow": "^4.1.0"
+  },
+  "devDependencies": {
+    "@istanbuljs/nyc-config-typescript": "^1.0.1",
+    "@types/dotenv-flow": "^3.3.0",
+    "@types/express": "^4.17.17",
+    "@types/fhir": "^0.0.40",
+    "@types/jasmine": "^5.1.4",
+    "@types/node": "^20.11.6",
+    "@types/supertest": "^6.0.2",
+    "@typescript-eslint/eslint-plugin": "^6.2.1",
+    "@typescript-eslint/parser": "^6.2.1",
+    "eslint": "^8.30.0",
+    "fhir": "^4.7.9",
+    "jasmine": "^5.1.0",
+    "nock": "^13.0.5",
+    "nyc": "^15.1.0",
+    "supertest": "^6.0.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.6"
+  }
+}
