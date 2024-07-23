@@ -208,7 +208,12 @@ async function sendQuery(
   });
   console.log("Complete");
   if (response.status === 200) {
-    const json: unknown = await response.json();
+    let json: unknown;
+    try {
+      json = await response.json();
+    } catch (ex) {
+      throw new APIError('Unable to parse response as JSON', response, ex.message);
+    }
     if (isSIECResponse(json)) {
       return convertResponseToSearchSet(json, ctgService);
     } else if (isSIECErrorResponse(json)) {

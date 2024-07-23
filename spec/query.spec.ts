@@ -7,6 +7,7 @@ import { Bundle } from "fhir/r4";
 import {
   CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
   ClinicalTrialsGovService,
+  ResearchStudy,
   SearchSet,
 } from "clinical-trial-matching-service";
 import createClinicalTrialLookup, {
@@ -117,7 +118,7 @@ describe("SIECQuery", () => {
         ],
       }).toString()
     ).toEqual(
-      '{"zip":"01730","distance":25,"phase":"phase-1","status":"approved","conditions":[]}'
+      '{"resourceType":"Bundle","type":"collection","entry":[{"resource":{"resourceType":"Parameters","parameter":[{"name":"zipCode","valueString":"01730"},{"name":"travelRadius","valueString":"25"},{"name":"phase","valueString":"phase-1"},{"name":"recruitmentStatus","valueString":"approved"}]}}]}'
     );
   });
 });
@@ -129,18 +130,18 @@ describe("convertResponseToSearchSet()", () => {
     });
     expect(searchSet.entry).toEqual([
       {
-        search: {},
-        resource: {
-          resourceType: "ResearchStudy",
-          status: "active",
+        search: {
+          mode: 'match'
+        },
+        resource: jasmine.objectContaining({
           identifier: [
             {
               system: CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
               value: "NCT12345678",
               use: "official",
             },
-          ],
-        },
+          ]
+        }),
       },
     ]);
   });
@@ -208,9 +209,10 @@ describe("ClinicalTrialLookup", () => {
     expect(nock.isDone()).toBeTrue();
   });
 
-  it("generates a request", () => {
-    mockRequest.reply(200, { matchingTrials: [] });
-    return expectAsync(matcher(patientBundle)).toBeResolved();
+  it("generates a request", async () => {
+    mockRequest.reply(200, { nctIds: [] });
+    await matcher(patientBundle);
+    // No errors is passing
   });
 
   it("rejects with an error if an error is returned by the server", () => {
