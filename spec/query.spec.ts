@@ -3,30 +3,37 @@
  * results.
  */
 
-import { Bundle, BundleEntry } from "fhir/r4";
+import { Bundle } from "fhir/r4";
 import {
+  CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
   ClinicalTrialsGovService,
-  ResearchStudy,
   SearchSet,
 } from "clinical-trial-matching-service";
 import createClinicalTrialLookup, {
   convertResponseToSearchSet,
-  isQueryTrial,
-  isQueryResponse,
-  isQueryErrorResponse,
-  APIQuery,
-  QueryResponse,
-  QueryTrial,
+  isSIECResponse,
+  isSIECErrorResponse,
+  SIECQuery,
+  SIECResponse,
 } from "../src/query";
 import nock from "nock";
 
 describe("createClinicalTrialLookup()", () => {
+  let mockService: ClinicalTrialsGovService;
+
+  beforeEach(() => {
+    // Create but don't bother initing this, it just needs to exist for these tests
+    mockService = new ClinicalTrialsGovService(":memory:");
+  });
   it("creates a function if configured properly", () => {
     expect(
-      typeof createClinicalTrialLookup({
-        endpoint: "http://www.example.com/",
-        auth_token: "token",
-      })
+      typeof createClinicalTrialLookup(
+        {
+          endpoint: "http://www.example.com/",
+          auth_token: "token",
+        },
+        mockService
+      )
     ).toEqual("function");
   });
 
@@ -34,147 +41,53 @@ describe("createClinicalTrialLookup()", () => {
   // configurations
   it("raises an error if configuration is missing", () => {
     expect(() => {
-      createClinicalTrialLookup({});
+      createClinicalTrialLookup({}, mockService);
     }).toThrowError("Missing endpoint in configuration");
     expect(() => {
-      createClinicalTrialLookup({ endpoint: "http://www.example.com/" });
+      createClinicalTrialLookup(
+        { endpoint: "http://www.example.com/" },
+        mockService
+      );
     }).toThrowError("Missing auth_token in configuration");
   });
 });
 
-describe("isQueryTrial()", () => {
-  it("returns false for non-trial objects", () => {
-    expect(isQueryTrial(null)).toBeFalse();
-    expect(isQueryTrial(true)).toBeFalse();
-    expect(isQueryTrial("string")).toBeFalse();
-    expect(isQueryTrial(42)).toBeFalse();
-    expect(isQueryTrial({ invalid: true })).toBeFalse();
-  });
-
-  it("returns true on a matching object", () => {
-    expect(isQueryTrial({ name: "Hello" })).toBeTrue();
-  });
-});
-
-describe("isQueryResponse()", () => {
+describe("isSIECResponse()", () => {
   it("returns false for non-response objects", () => {
-    expect(isQueryResponse(null)).toBeFalse();
-    expect(isQueryResponse(true)).toBeFalse();
-    expect(isQueryResponse("string")).toBeFalse();
-    expect(isQueryResponse(42)).toBeFalse();
-    expect(isQueryResponse({ invalid: true })).toBeFalse();
+    expect(isSIECResponse(null)).toBeFalse();
+    expect(isSIECResponse(true)).toBeFalse();
+    expect(isSIECResponse("string")).toBeFalse();
+    expect(isSIECResponse(42)).toBeFalse();
+    expect(isSIECResponse({ invalid: true })).toBeFalse();
   });
 
   it("returns true on a matching object", () => {
-    expect(isQueryResponse({ matchingTrials: [] })).toBeTrue();
-    expect(isQueryResponse({ matchingTrials: [{ name: "Trial" }] })).toBeTrue();
+    expect(isSIECResponse({ nctIds: [] })).toBeTrue();
+    expect(isSIECResponse({ nctIds: ["NCT12345678"] })).toBeTrue();
     // Currently this is true. It may make sense to make it false, but for now,
     // a single invalid trial does not invalidate the array.
-    expect(isQueryResponse({ matchingTrials: [{ invalid: true }] })).toBeTrue();
+    expect(isSIECResponse({ nctIds: [{ invalid: true }] })).toBeTrue();
   });
 });
 
-describe("isQueryErrorResponse()", () => {
+describe("isSIECErrorResponse()", () => {
   it("returns false for non-response objects", () => {
-    expect(isQueryErrorResponse(null)).toBeFalse();
-    expect(isQueryErrorResponse(true)).toBeFalse();
-    expect(isQueryErrorResponse("string")).toBeFalse();
-    expect(isQueryErrorResponse(42)).toBeFalse();
-    expect(isQueryErrorResponse({ invalid: true })).toBeFalse();
+    expect(isSIECErrorResponse(null)).toBeFalse();
+    expect(isSIECErrorResponse(true)).toBeFalse();
+    expect(isSIECErrorResponse("string")).toBeFalse();
+    expect(isSIECErrorResponse(42)).toBeFalse();
+    expect(isSIECErrorResponse({ invalid: true })).toBeFalse();
   });
 
   it("returns true on a matching object", () => {
-    expect(isQueryErrorResponse({ error: "oops" })).toBeTrue();
+    expect(isSIECErrorResponse({ error: "oops" })).toBeTrue();
   });
 });
 
-describe("APIQuery", () => {
-  it("extracts passed properties", () => {
-    const query = new APIQuery({
-      resourceType: "Bundle",
-      type: "collection",
-      entry: [
-        {
-          resource: {
-            resourceType: "Parameters",
-            parameter: [
-              {
-                name: "zipCode",
-                valueString: "01730",
-              },
-              {
-                name: "travelRadius",
-                valueString: "25",
-              },
-              {
-                name: "phase",
-                valueString: "phase-1",
-              },
-              {
-                name: "recruitmentStatus",
-                valueString: "approved",
-              },
-            ],
-          },
-        },
-      ],
-    });
-    expect(query.zipCode).toEqual("01730");
-    expect(query.travelRadius).toEqual(25);
-    expect(query.phase).toEqual("phase-1");
-    expect(query.recruitmentStatus).toEqual("approved");
-  });
-
-  it("gathers conditions", () => {
-    const query = new APIQuery({
-      resourceType: "Bundle",
-      type: "collection",
-      entry: [
-        {
-          resource: {
-            resourceType: "Condition",
-            subject: {
-              type: "Patient",
-              reference: "urn:patient/1"
-            },
-            code: {
-              coding: [
-                {
-                  system: "http://www.example.com/",
-                  code: "test",
-                },
-              ],
-            },
-          },
-        },
-        {
-          resource: {
-            resourceType: "Condition",
-            subject: {
-              type: "Patient",
-              reference: "urn:patient/1"
-            },
-            code: {
-              coding: [
-                {
-                  system: "https://www.example.com/",
-                  code: "test-2",
-                },
-              ],
-            },
-          },
-        },
-      ],
-    });
-    expect(query.conditions).toEqual([
-      { system: "http://www.example.com/", code: "test" },
-      { system: "https://www.example.com/", code: "test-2" },
-    ]);
-  });
-
+describe("SIECQuery", () => {
   it("converts the query to a string", () => {
     expect(
-      new APIQuery({
+      new SIECQuery({
         resourceType: "Bundle",
         type: "collection",
         entry: [
@@ -207,71 +120,45 @@ describe("APIQuery", () => {
       '{"zip":"01730","distance":25,"phase":"phase-1","status":"approved","conditions":[]}'
     );
   });
-
-  it("ignores unknown parameters", () => {
-    // Passing in this case is simply "not raising an exception"
-    new APIQuery({
-      resourceType: "Bundle",
-      type: "collection",
-      entry: [
-        {
-          resource: {
-            resourceType: "Parameters",
-            parameter: [
-              {
-                name: "unknown",
-                valueString: "invalid",
-              },
-            ],
-          },
-        },
-      ],
-    });
-  });
-
-  it("ignores invalid entries", () => {
-    // Passing in this case is simply "not raising an exception"
-    const bundle: Bundle = {
-      resourceType: "Bundle",
-      type: "collection",
-      entry: [],
-    };
-    // Force an invalid entry in
-    bundle.entry?.push(({ invalid: true } as unknown) as BundleEntry);
-    new APIQuery(bundle);
-    // Passing is not raising an exception
-  });
 });
 
 describe("convertResponseToSearchSet()", () => {
-  it("converts trials", () => {
-    return expectAsync(
-      convertResponseToSearchSet({
-        matchingTrials: [{ name: "test" }],
-      }).then((searchSet) => {
-        expect(searchSet.entry.length).toEqual(1);
-        expect(searchSet.entry[0].resource).toBeInstanceOf(ResearchStudy);
-        expect(
-          searchSet.entry[0].resource?.status
-        ).toEqual("active");
-      })
-    ).toBeResolved();
+  it("converts trials", async () => {
+    const searchSet = await convertResponseToSearchSet({
+      nctIds: ["NCT12345678"],
+    });
+    expect(searchSet.entry).toEqual([
+      {
+        search: {},
+        resource: {
+          resourceType: "ResearchStudy",
+          status: "active",
+          identifier: [
+            {
+              system: CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
+              value: "NCT12345678",
+              use: "official",
+            },
+          ],
+        },
+      },
+    ]);
   });
 
-  it("skips invalid trials", () => {
-    const response: QueryResponse = {
-      matchingTrials: [],
+  it("skips invalid trials", async () => {
+    const response: SIECResponse = {
+      nctIds: [],
     };
     // Push on an invalid object
-    response.matchingTrials.push(({
+    response.nctIds.push({
       invalidObject: true,
-    } as unknown) as QueryTrial);
-    return expectAsync(convertResponseToSearchSet(response)).toBeResolved();
+    } as unknown as string);
+    await convertResponseToSearchSet(response);
   });
 
-  it("uses the backup service if provided", () => {
+  it("uses the backup service if provided", async () => {
     // Note that we don't initialize the backup service so no files are created
-    const backupService = new ClinicalTrialsGovService("temp");
+    const backupService = new ClinicalTrialsGovService(":memory:");
     // Instead we install a spy that takes over "updating" the research studies
     // by doing nothing
     const spy = spyOn(backupService, "updateResearchStudies").and.callFake(
@@ -279,18 +166,13 @@ describe("convertResponseToSearchSet()", () => {
         return Promise.resolve(studies);
       }
     );
-    return expectAsync(
-      convertResponseToSearchSet(
-        {
-          matchingTrials: [{ name: "test" }],
-        },
-        backupService
-      )
-    )
-      .toBeResolved()
-      .then(() => {
-        expect(spy).toHaveBeenCalled();
-      });
+    await convertResponseToSearchSet(
+      {
+        nctIds: ["NCT12345678"],
+      },
+      backupService
+    );
+    expect(spy).toHaveBeenCalled();
   });
 });
 
@@ -301,6 +183,7 @@ describe("ClinicalTrialLookup", () => {
     type: "batch",
     entry: [],
   };
+  const ctgService = new ClinicalTrialsGovService(":memory:");
   let matcher: (patientBundle: Bundle) => Promise<SearchSet>;
   let scope: nock.Scope;
   let mockRequest: nock.Interceptor;
@@ -308,10 +191,13 @@ describe("ClinicalTrialLookup", () => {
     // Create the matcher here. This creates a new instance each test so that
     // each test can adjust it as necessary without worrying about interfering
     // with other tests.
-    matcher = createClinicalTrialLookup({
-      endpoint: "https://www.example.com/endpoint",
-      auth_token: "test_token",
-    });
+    matcher = createClinicalTrialLookup(
+      {
+        endpoint: "https://www.example.com/endpoint",
+        auth_token: "test_token",
+      },
+      ctgService
+    );
     // Create the interceptor for the mock request here as it's the same for
     // each test
     scope = nock("https://www.example.com");

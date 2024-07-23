@@ -3,13 +3,25 @@
  * the underlying service to the FHIR ResearchStudy type.
  */
 
-import { ResearchStudy } from 'clinical-trial-matching-service';
-import { QueryTrial } from './query';
+import {
+  ResearchStudy,
+  CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
+} from "clinical-trial-matching-service";
 
-export function convertToResearchStudy(json: QueryTrial, id: number): ResearchStudy {
+export function convertToResearchStudy(
+  nctId: string,
+  id: number
+): ResearchStudy {
   const result = new ResearchStudy(id);
+  result.identifier = [
+    {
+      system: CLINICAL_TRIAL_IDENTIFIER_CODING_SYSTEM_URL,
+      value: nctId,
+      use: "official",
+    },
+  ];
   // Add whatever fields can be added here, for example:
-  result.status = 'active';
+  result.status = "active";
   return result;
 }
 

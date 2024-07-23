@@ -2,14 +2,13 @@
  * Handles conversion of patient bundle data to a proper request for matching service apis.
  * Retrieves api response as promise to be used in conversion to fhir ResearchStudy
  */
-import https from "https";
-import { IncomingMessage } from "http";
-import { Bundle, Coding, Condition } from "fhir/r4";
+import { Bundle } from "fhir/r4";
 import {
   ClinicalTrialsGovService,
   ServiceConfiguration,
   ResearchStudy,
   SearchSet,
+  QueryParameters,
 } from "clinical-trial-matching-service";
 import convertToResearchStudy from "./researchstudy-mapping";
 
@@ -28,7 +27,7 @@ export interface QueryConfiguration extends ServiceConfiguration {
  */
 export function createClinicalTrialLookup(
   configuration: QueryConfiguration,
-  ctgService?: ClinicalTrialsGovService
+  ctgService: ClinicalTrialsGovService
 ): (patientBundle: Bundle) => Promise<SearchSet> {
   // Raise errors on missing configuration
   if (typeof configuration.endpoint !== "string") {
@@ -43,7 +42,7 @@ export function createClinicalTrialLookup(
     patientBundle: Bundle
   ): Promise<SearchSet> {
     // Create the query based on the patient bundle:
-    const query = new APIQuery(patientBundle);
+    const query = new SIECQuery(patientBundle);
     // And send the query to the server
     return sendQuery(endpoint, query, bearerToken, ctgService);
   };
@@ -51,69 +50,47 @@ export function createClinicalTrialLookup(
 
 export default createClinicalTrialLookup;
 
-// Generic type for the request data being sent to the server. Fill this out
-// with a more complete type.
-type QueryRequest = string;
+// Currently assume the SIECQueryJSON will be a patient bundle
+export type SIECQueryJSON = Bundle;
 
 /**
- * Generic type for the trials returned.
- *
- * TO-DO: Fill this out to match your implementation
+ * Response from the server.
  */
-export interface QueryTrial extends Record<string, unknown> {
-  name: string;
+export interface SIECResponse extends Record<string, unknown> {
+  nctIds: string[];
 }
 
 /**
- * Type guard to determine if an object is a valid QueryTrial.
- * @param o the object to determine if it is a QueryTrial
+ * Type guard to determine if an object is a valid SEICResponse.
+ * @param o the object to determine if it is a SEICResponse
  */
-export function isQueryTrial(o: unknown): o is QueryTrial {
-  if (typeof o !== "object" || o === null) return false;
-  // TO-DO: Make this match your format.
-  return typeof (o as QueryTrial).name === "string";
-}
-
-// Generic type for the response data being received from the server.
-export interface QueryResponse extends Record<string, unknown> {
-  matchingTrials: QueryTrial[];
-}
-
-/**
- * Type guard to determine if an object is a valid QueryResponse.
- * @param o the object to determine if it is a QueryResponse
- */
-export function isQueryResponse(o: unknown): o is QueryResponse {
+export function isSIECResponse(o: unknown): o is SIECResponse {
   if (typeof o !== "object" || o === null) return false;
 
   // Note that the following DOES NOT check the array to make sure every object
   // within it is valid. Currently this is done later in the process. This
-  // makes this type guard or the QueryResponse type sort of invalid. However,
+  // makes this type guard or the SEICResponse type sort of invalid. However,
   // the assumption is that a single unparsable trial should not cause the
   // entire response to be thrown away.
-  return Array.isArray((o as QueryResponse).matchingTrials);
+  return Array.isArray((o as SIECResponse).nctIds);
 }
 
-export interface QueryErrorResponse extends Record<string, unknown> {
+export interface SIECErrorResponse extends Record<string, unknown> {
   error: string;
 }
 
 /**
- * Type guard to determine if an object is a QueryErrorResponse.
- * @param o the object to determine if it is a QueryErrorResponse
+ * Type guard to determine if an object is a SEICErrorResponse.
+ * @param o the object to determine if it is a SEICErrorResponse
  */
-export function isQueryErrorResponse(o: unknown): o is QueryErrorResponse {
+export function isSIECErrorResponse(o: unknown): o is SIECErrorResponse {
   if (typeof o !== "object" || o === null) return false;
-  return typeof (o as QueryErrorResponse).error === "string";
+  return typeof (o as SIECErrorResponse).error === "string";
 }
 
 // API RESPONSE SECTION
 export class APIError extends Error {
-  constructor(
-    message: string,
-    public result: IncomingMessage,
-    public body: string
-  ) {
+  constructor(message: string, public response: Response, public body: string) {
     super(message);
   }
 }
@@ -126,8 +103,7 @@ export class APIError extends Error {
  * based on a patient bundle.
  * Reference https://github.com/mcode/clinical-trial-matching-engine/wiki to see patientBundle Structures
  */
-export class APIQuery {
-  // The following example fields are defined by default within the matching UI
+export class SIECQuery {
   /**
    * US zip code
    */
@@ -144,10 +120,8 @@ export class APIQuery {
    * A FHIR ResearchStudy status
    */
   recruitmentStatus: string;
-  /**
-   * A set of conditions.
-   */
-  conditions: Coding[] = [];
+  patientBundle: Bundle;
+  parameters: QueryParameters;
   // TO-DO Add any additional fields which need to be extracted from the bundle to construct query
 
   /**
@@ -155,62 +129,19 @@ export class APIQuery {
    * @param patientBundle the patient bundle to use for field values
    */
   constructor(patientBundle: Bundle) {
-    for (const entry of patientBundle.entry) {
-      if (!("resource" in entry)) {
-        // Skip bad entries
-        continue;
-      }
-      const resource = entry.resource;
-      // Pull out search parameters
-      if (resource.resourceType === "Parameters") {
-        for (const parameter of resource.parameter) {
-          if (parameter.name === "zipCode") {
-            this.zipCode = parameter.valueString;
-          } else if (parameter.name === "travelRadius") {
-            this.travelRadius = parseFloat(parameter.valueString);
-          } else if (parameter.name === "phase") {
-            this.phase = parameter.valueString;
-          } else if (parameter.name === "recruitmentStatus") {
-            this.recruitmentStatus = parameter.valueString;
-          }
-        }
-      }
-      // Gather all conditions the patient has
-      if (resource.resourceType === "Condition") {
-        this.addCondition(resource);
-      }
-      // TO-DO Extract any additional resources that you defined
-    }
-  }
-
-  /**
-   * Handle condition data. The default implementation does nothing, your
-   * implementation may pull out specific data.
-   * @param condition the condition to add
-   */
-  addCondition(condition: Condition): void {
-    for (const coding of condition.code.coding) {
-      this.conditions.push(coding);
-    }
+    this.patientBundle = patientBundle;
   }
 
   /**
    * Create the information sent to the server.
-   * @return {string} the api query
+   * @return the query object
    */
-  toQuery(): QueryRequest {
-    return JSON.stringify({
-      zip: this.zipCode,
-      distance: this.travelRadius,
-      phase: this.phase,
-      status: this.recruitmentStatus,
-      conditions: this.conditions,
-    });
+  toQuery(): SIECQueryJSON {
+    return this.patientBundle;
   }
 
   toString(): string {
-    // Note that if toQuery is no longer a string, this will no longer work
-    return this.toQuery();
+    return JSON.stringify(this.toQuery());
   }
 }
 
@@ -223,20 +154,20 @@ export class APIQuery {
  *     ClinicalTrials.gov
  */
 export function convertResponseToSearchSet(
-  response: QueryResponse,
+  response: SIECResponse,
   ctgService?: ClinicalTrialsGovService
 ): Promise<SearchSet> {
   // Our final response
   const studies: ResearchStudy[] = [];
   // For generating IDs
   let id = 0;
-  for (const trial of response.matchingTrials) {
-    if (isQueryTrial(trial)) {
-      studies.push(convertToResearchStudy(trial, id++));
+  for (const nctId of response.nctIds) {
+    if (typeof nctId === "string") {
+      studies.push(convertToResearchStudy(nctId, id++));
     } else {
       // This trial could not be understood. It can be ignored if that should
       // happen or raised/logged as an error.
-      console.error("Unable to parse trial from server: %o", trial);
+      console.error("Unable to parse trial from server: %o", nctId);
     }
   }
   if (ctgService) {
@@ -261,74 +192,40 @@ export function convertResponseToSearchSet(
  *     update the returned trials with additional information pulled from
  *     ClinicalTrials.gov
  */
-function sendQuery(
+async function sendQuery(
   endpoint: string,
-  query: APIQuery,
+  query: SIECQuery,
   bearerToken: string,
   ctgService?: ClinicalTrialsGovService
 ): Promise<SearchSet> {
-  return new Promise((resolve, reject) => {
-    const body = Buffer.from(query.toQuery(), "utf8");
-
-    const request = https.request(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json; charset=UTF-8",
-          "Content-Length": body.byteLength.toString(),
-          Authorization: "Bearer " + bearerToken,
-        },
-      },
-      (result) => {
-        let responseBody = "";
-        result.on("data", (chunk) => {
-          responseBody += chunk;
-        });
-        result.on("end", () => {
-          console.log("Complete");
-          if (result.statusCode === 200) {
-            let json: unknown;
-            try {
-              json = JSON.parse(responseBody) as unknown;
-            } catch (ex) {
-              reject(
-                new APIError(
-                  "Unable to parse response as JSON",
-                  result,
-                  responseBody
-                )
-              );
-            }
-            if (isQueryResponse(json)) {
-              resolve(convertResponseToSearchSet(json, ctgService));
-            } else if (isQueryErrorResponse(json)) {
-              reject(
-                new APIError(
-                  `Error from service: ${json.error}`,
-                  result,
-                  responseBody
-                )
-              );
-            } else {
-              reject(new Error("Unable to parse response from server"));
-            }
-          } else {
-            reject(
-              new APIError(
-                `Server returned ${result.statusCode} ${result.statusMessage}`,
-                result,
-                responseBody
-              )
-            );
-          }
-        });
-      }
-    );
-
-    request.on("error", (error) => reject(error));
-
-    request.write(body);
-    request.end();
+  const response = await fetch(endpoint, {
+    method: "POST",
+    body: query.toString(),
+    headers: {
+      "Content-Type": "application/json; charset=UTF-8",
+      Authorization: "Bearer " + bearerToken,
+    },
   });
+  console.log("Complete");
+  if (response.status === 200) {
+    const json: unknown = await response.json();
+    if (isSIECResponse(json)) {
+      return convertResponseToSearchSet(json, ctgService);
+    } else if (isSIECErrorResponse(json)) {
+      throw new APIError(
+        `Error from service: ${json.error}`,
+        response,
+        json.error
+      );
+    } else {
+      throw new Error("Unable to parse response from server");
+    }
+  } else {
+    throw new APIError(
+      `Server returned ${response.status} ${response.statusText}`,
+      response,
+      // Note that in this case the response hasn't been read yet
+      await response.text()
+    );
+  }
 }
